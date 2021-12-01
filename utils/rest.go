@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jfrog/jfrog-cli-core/v2/utils/config"
+	"github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 
 	dto "github.com/prometheus/client_model/go"
@@ -72,6 +73,45 @@ type LabelsStruct struct {
 	Type   string `json:"type"`
 	Max    string `json:"max"`
 	Pool   string `json:"pool"`
+}
+
+type SupportedTypes struct {
+	SupportedPackageTypes []SupportedPackageType `json:"supportedPackageTypes"`
+}
+
+type SupportedPackageType struct {
+	Type      string       `json:"type"`
+	Extension []Extensions `json:"extensions"`
+}
+
+type Extensions struct {
+	Extension string `json:"extension"`
+	IsFile    bool   `json:"is_file"`
+}
+
+type FileList struct {
+	Files []Files `json:"files"`
+}
+
+type Files struct {
+	Uri    string `json:"uri"`
+	Sha256 string `json:"sha2"`
+}
+
+func GetSupportedTypesJSON() SupportedTypes {
+	var supportTypesFile SupportedTypes
+	credsFile, err := os.Open(utils.GetUserHomeDir() + "/.jfrog/supported_types.json")
+	if err != nil {
+		log.Fatalf("Invalid creds file:", err)
+	}
+	defer credsFile.Close()
+	scanner, _ := ioutil.ReadAll(credsFile)
+	err = json.Unmarshal(scanner, &supportTypesFile)
+	if err != nil {
+		log.Warn(err)
+	}
+
+	return supportTypesFile
 }
 
 //GetConfig get config from cli
@@ -308,6 +348,36 @@ func Trace() TraceData {
 	return trace
 }
 
+type detailArtifact struct {
+	Status                        string `json:"status"`
+	IsImpactPathsRecoveryRequired bool   `json:"is_impact_paths_recovery_required"`
+}
+
+//
+func GetStatusArtifact(repo string, pkgtype string, uri string, sha256 string, config *config.ServerDetails) (string, bool) {
+	body := "{\"repository_pkg_type\":" + "\"" + pkgtype + "\"," +
+		"\"path\":" + "\"" + repo + uri + "\"," +
+		"\"sha256\":" + "\"" + sha256 + "\"" +
+		"}"
+	headers := map[string]string{"Content-type": "application/json"}
+	resp, respCode, _ := GetRestAPI("POST", true, config.XrayUrl+"api/v1/scan/status/artifact", config.User, config.Password, body, headers, 0)
+	if respCode != 200 {
+		log.Error("Error getting details:", string(resp), body, headers, config.User, config.Password)
+	}
+	log.Debug(string(resp), body, headers, config.User, config.Password)
+
+	var detail detailArtifact
+	err := json.Unmarshal(resp, &detail)
+	if err != nil {
+		log.Error(err)
+	}
+	if detail.Status == "not scanned" {
+		return detail.Status, false
+	} else {
+		return detail.Status, true
+	}
+}
+
 //GetRestAPI GET rest APIs response with error handling
 func GetRestAPI(method string, auth bool, urlInput, userName, apiKey, providedfilepath string, header map[string]string, retry int) ([]byte, int, http.Header) {
 	if retry > 5 {
@@ -315,6 +385,9 @@ func GetRestAPI(method string, auth bool, urlInput, userName, apiKey, providedfi
 		return nil, 0, nil
 	}
 	body := new(bytes.Buffer)
+	if method == "POST" && providedfilepath != "" {
+		body = bytes.NewBuffer([]byte(providedfilepath))
+	}
 	//PUT upload file
 	if method == "PUT" && providedfilepath != "" {
 		//req.Header.Set()
