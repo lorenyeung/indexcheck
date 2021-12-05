@@ -102,7 +102,7 @@ func GetSupportedTypesJSON() SupportedTypes {
 	var supportTypesFile SupportedTypes
 	credsFile, err := os.Open(utils.GetUserHomeDir() + "/.jfrog/supported_types.json")
 	if err != nil {
-		log.Fatalf("Invalid creds file:", err)
+		log.Fatalf("Invalid supported_types.json file:", err)
 	}
 	defer credsFile.Close()
 	scanner, _ := ioutil.ReadAll(credsFile)
@@ -130,7 +130,7 @@ func GetConfig() (*config.ServerDetails, error) {
 		//TODO print some error and exit
 	}
 
-	ping, respCode, _ := GetRestAPI("GET", true, config.Url+"xray/api/v1/system/ping", config.User, config.Password, "", nil, 1)
+	ping, respCode, _ := GetRestAPI("GET", true, config.Url+"xray/api/v1/system/ping", config, "", nil, 1)
 	if respCode != 200 {
 		return nil, errors.New("Xray is not up:" + string(ping))
 	}
@@ -139,7 +139,7 @@ func GetConfig() (*config.ServerDetails, error) {
 }
 
 func GetMetricsDataRaw(config *config.ServerDetails) []byte {
-	metrics, respCode, _ := GetRestAPI("GET", true, config.Url+"xray/api/v1/metrics", config.User, config.Password, "", nil, 1)
+	metrics, respCode, _ := GetRestAPI("GET", true, config.Url+"xray/api/v1/metrics", config, "", nil, 1)
 	if respCode != 200 {
 		LogRestFile.Error("Received ", respCode, " while getting metrics")
 		//return nil, errors.New("Received " + strconv.Itoa(respCode) + " HTTP code while getting metrics")
@@ -254,7 +254,7 @@ func ByteCountDecimal(b int64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f%cB", float64(b)/float64(div), "kMGTPE"[exp])
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
 
 func GetMetricsData(config *config.ServerDetails, counter int, prettyPrint bool, interval int) ([]Data, string, int, error) {
@@ -360,7 +360,7 @@ func GetStatusArtifact(repo string, pkgtype string, uri string, sha256 string, c
 		"\"sha256\":" + "\"" + sha256 + "\"" +
 		"}"
 	headers := map[string]string{"Content-type": "application/json"}
-	resp, respCode, _ := GetRestAPI("POST", true, config.XrayUrl+"api/v1/scan/status/artifact", config.User, config.Password, body, headers, 0)
+	resp, respCode, _ := GetRestAPI("POST", true, config.XrayUrl+"api/v1/scan/status/artifact", config, body, headers, 0)
 	if respCode != 200 {
 		log.Error("Error getting details:", string(resp), body, headers, config.User, config.Password)
 	}
@@ -378,8 +378,25 @@ func GetStatusArtifact(repo string, pkgtype string, uri string, sha256 string, c
 	}
 }
 
+type IndexedRepo struct {
+	Name    string `json:"name"`
+	PkgType string `json:"pkgType"`
+	Type    string `json:"type"`
+}
+
+//Test if remote repository exists and is a remote
+func CheckTypeAndRepoParams(config *config.ServerDetails) []IndexedRepo {
+	repoCheckData, repoStatusCode, _ := GetRestAPI("GET", true, config.ArtifactoryUrl+"api/xrayRepo/getIndex", config, "", nil, 1)
+	if repoStatusCode != 200 {
+		log.Fatalf("Repo list does not exist.")
+	}
+	var result []IndexedRepo
+	json.Unmarshal(repoCheckData, &result)
+	return result
+}
+
 //GetRestAPI GET rest APIs response with error handling
-func GetRestAPI(method string, auth bool, urlInput, userName, apiKey, providedfilepath string, header map[string]string, retry int) ([]byte, int, http.Header) {
+func GetRestAPI(method string, auth bool, urlInput string, config *config.ServerDetails, providedfilepath string, header map[string]string, retry int) ([]byte, int, http.Header) {
 	if retry > 5 {
 		LogRestFile.Warn("Exceeded retry limit, cancelling further attempts")
 		return nil, 0, nil
@@ -407,7 +424,11 @@ func GetRestAPI(method string, auth bool, urlInput, userName, apiKey, providedfi
 	client := http.Client{}
 	req, err := http.NewRequest(method, urlInput, body)
 	if auth {
-		req.SetBasicAuth(userName, apiKey)
+		if config.Password != "" {
+			req.SetBasicAuth(config.User, config.Password)
+		} else if config.AccessToken != "" {
+			req.Header.Set("Authorization", "Bearer"+config.AccessToken)
+		}
 	}
 	for x, y := range header {
 		LogRestFile.Debug("Recieved extra header:", x+":"+y)
@@ -440,12 +461,12 @@ func GetRestAPI(method string, auth bool, urlInput, userName, apiKey, providedfi
 		case 429:
 			LogRestFile.Error("Received ", resp.StatusCode, " Too Many Requests on ", method, " request for ", urlInput, ", sleeping then retrying, attempt ", retry)
 			time.Sleep(10 * time.Second)
-			GetRestAPI(method, auth, urlInput, userName, apiKey, providedfilepath, header, retry+1)
+			GetRestAPI(method, auth, urlInput, config, providedfilepath, header, retry+1)
 		case 204:
 			if method == "GET" {
 				LogRestFile.Error("Received ", resp.StatusCode, " No Content on ", method, " request for ", urlInput, ", sleeping then retrying")
 				time.Sleep(10 * time.Second)
-				GetRestAPI(method, auth, urlInput, userName, apiKey, providedfilepath, header, retry+1)
+				GetRestAPI(method, auth, urlInput, config, providedfilepath, header, retry+1)
 			} else {
 				LogRestFile.Debug("Received ", resp.StatusCode, " OK on ", method, " request for ", urlInput, " continuing")
 			}
@@ -477,7 +498,7 @@ func GetRestAPI(method string, auth bool, urlInput, userName, apiKey, providedfi
 				log.Warn("Data Read on ", urlInput, " failed with:", err, ", sleeping then retrying, attempt:", retry)
 				time.Sleep(10 * time.Second)
 
-				GetRestAPI(method, auth, urlInput, userName, apiKey, providedfilepath, header, retry+1)
+				GetRestAPI(method, auth, urlInput, config, providedfilepath, header, retry+1)
 			}
 
 			return data, statusCode, headers

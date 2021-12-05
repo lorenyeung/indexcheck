@@ -26,6 +26,12 @@ type queueDetails struct {
 	TotalCount    int
 }
 
+type IndexedRepo struct {
+	Name    string `json:"name"`
+	PkgType string `json:"pkgType"`
+	Type    string `json:"type"`
+}
+
 func GetCheckCommand() components.Command {
 	return components.Command{
 		Name:        "check",
@@ -99,8 +105,16 @@ func CheckCmd(c *components.Context) error {
 		return nil
 	}
 	supportedTypes := helpers.GetSupportedTypesJSON()
+	indexList := CheckTypeAndRepoParams(config)
+
+	//convert to map for speedier look up
+	indexedMap := make(map[string]IndexedRepo)
+	for i := 0; i < len(indexList); i += 1 {
+		indexedMap[indexList[i].Name] = indexList[i]
+	}
+
 	// probably not the right way to do it
-	if len(c.Arguments) == 1 || len(c.Arguments) == 2 {
+	if len(c.Arguments) > 1 && len(c.Arguments) < 4 {
 		var err error
 		switch arg := c.Arguments[0]; arg {
 		case "all":
@@ -109,25 +123,44 @@ func CheckCmd(c *components.Context) error {
 		case "list":
 			return nil
 		case "repo":
-			if len(c.Arguments) == 1 {
-				return errors.New("missing repo string")
-			}
-			indexRepo(c.Arguments[1], "Generic", supportedTypes, "local", config, "")
+			//check repo, and get type
+			err = validateCheck(c.Arguments[1], "", indexedMap, supportedTypes, config)
 		case "path":
-
-			//printStatus()
-			return nil
+			if len(c.Arguments) == 2 {
+				return errors.New("missing path")
+			}
+			path := c.Arguments[2]
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
+			}
+			//weird behaviour with docker
+			err = validateCheck(c.Arguments[1], path, indexedMap, supportedTypes, config)
 		default:
 			return errors.New(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 		}
+		if err != nil {
+			return err
+		}
 		endTime := time.Now()
 		totalTime := endTime.Sub(timeStart)
-		log.Info("Execution took:", totalTime)
+		fmt.Println("Execution took:", totalTime)
 		return nil
 	}
 	//return if wrong num arg
 	return errors.New("Wrong number of arguments. Expected: 0,1 or 2, " + "Received: " + strconv.Itoa(len(c.Arguments)))
 
+}
+
+func validateCheck(repoName, path string, indexedMap map[string]IndexedRepo, supportedTypes helpers.SupportedTypes, config *config.ServerDetails) error {
+	//check repo, and get type
+	repo := indexedMap[repoName]
+	if repo.Name == "" {
+		return errors.New("repository " + repoName + " does not exist or is not marked for indexing")
+	}
+	fmt.Println("checking:" + repoName + " at path:" + path)
+	//path validation may be needed
+	indexRepo(repo.Name, repo.PkgType, supportedTypes, repo.Type, config, path)
+	return nil
 }
 
 func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoType string, config *config.ServerDetails, folder string) {
@@ -152,7 +185,7 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 		repo = repo + "-cache"
 	}
 	//TODO need workaround if using token, use content reader for larger amounts of data, or only allow path
-	fileListData, respCode, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+folder+"?list&deep=1", config.User, config.Password, "", nil, 0)
+	fileListData, respCode, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+folder+"?list&deep=1", config, "", nil, 0)
 	if respCode != 200 {
 		log.Fatalf("File list received unexpected response code:", respCode, " :", string(fileListData))
 	}
@@ -164,9 +197,9 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 	var notIndexCount, totalCount, notIndexableCount, noExtCount int
 	indexAnalysis := list.New()
 	for i := range fileListStruct.Files {
+		fileListStruct.Files[i].Uri = folder + fileListStruct.Files[i].Uri
 		for j := range extensions {
-			fileListStruct.Files[i].Uri = folder + fileListStruct.Files[i].Uri
-
+			//maybe here?
 			log.Debug("File found:", fileListStruct.Files[i].Uri, " matching against:", extensions[j].Extension)
 			if strings.Contains(fileListStruct.Files[i].Uri, extensions[j].Extension) {
 				var indexAnalysisTest bool = true
@@ -188,7 +221,7 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 					}
 					body := "{\"artifacts\": [{\"repository\":\"" + repo + "\",\"path\":\"" + fileListStruct.Files[i].Uri + "\"}]}"
 
-					resp, respCode, _ := helpers.GetRestAPI("POST", true, config.XrayUrl+"api/v1/forceReindex", config.Url, config.Password, body, m, 0)
+					resp, respCode, _ := helpers.GetRestAPI("POST", true, config.XrayUrl+"api/v1/forceReindex", config, body, m, 0)
 					if respCode != 200 {
 						notIndexCount++
 						log.Warn("Unexpected Xray response:HTTP", respCode, " ", string(resp))
@@ -255,6 +288,17 @@ func worker(id int, jobs <-chan int, results chan<- int, queue *list.List, confi
 	}
 }
 
+//Test if remote repository exists and is a remote
+func CheckTypeAndRepoParams(config *config.ServerDetails) []IndexedRepo {
+	repoCheckData, repoStatusCode, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/xrayRepo/getIndex", config, "", nil, 1)
+	if repoStatusCode != 200 {
+		log.Fatalf("Repo list does not exist.")
+	}
+	var result []IndexedRepo
+	json.Unmarshal(repoCheckData, &result)
+	return result
+}
+
 func Details(q queueDetails, config *config.ServerDetails) (int, int) {
 	//send to details
 	var printAll bool
@@ -286,15 +330,15 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 	var fileDetails []byte
 	var fileInfo helpers.FileInfo
 	var size string
-	if pkgType == "docker" {
+	if pkgType == "docker" || strings.HasSuffix(uri, "manifest.json") {
 		uri = strings.TrimSuffix(uri, "/manifest.json")
-		folderDetails, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config.User, config.Password, "", nil, 0)
+		folderDetails, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
 		json.Unmarshal(folderDetails, &fileInfo)
 		var size64 int64
 		for i := range fileInfo.Children {
 			path := fileInfo.Children[i].Uri
 			var fileInfoDocker helpers.FileInfo
-			fileDetailsDocker, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri+path, config.User, config.Password, "", nil, 0)
+			fileDetailsDocker, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri+path, config, "", nil, 0)
 			json.Unmarshal(fileDetailsDocker, &fileInfoDocker)
 			size64 = size64 + helpers.StringToInt64(fileInfoDocker.Size)
 		}
@@ -302,11 +346,12 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 		fileInfo.MimeType = "application/json"
 		size = helpers.ByteCountDecimal(size64)
 	} else {
-		fileDetails, _, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config.User, config.Password, "", nil, 0)
+		fileDetails, _, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
 		json.Unmarshal(fileDetails, &fileInfo)
 		size = helpers.ByteCountDecimal(helpers.StringToInt64(fileInfo.Size))
 	}
 	status = fmt.Sprintf("%-19v", status)
+	size = fmt.Sprintf("%-10v", size)
 	//not really helpful for docker
 	fmt.Println(status, "\t", size, "\t", fmt.Sprintf("%-16v", strings.TrimPrefix(fileInfo.MimeType, "application/")), " ", repo+uri)
 	return nil

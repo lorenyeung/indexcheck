@@ -15,7 +15,7 @@ func main() {
 func getApp() components.App {
 	app := components.App{}
 	app.Name = "indexcheck"
-	app.Description = "Easily verify stuff."
+	app.Description = "Verify xray scan status."
 	app.Version = "v1.0.0"
 	app.Commands = getCommands()
 	return app
