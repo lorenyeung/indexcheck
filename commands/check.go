@@ -162,7 +162,7 @@ func CheckCmd(c *components.Context) error {
 			if len(c.Arguments) == 1 {
 				return errors.New("missing build name")
 			}
-			indexBuild(c.Arguments[1], config)
+			err = indexBuild(c.Arguments[1], config, c)
 
 		default:
 			return errors.New("non existent argument:" + arg)
@@ -191,14 +191,35 @@ func validateCheck(repoName, path string, indexedMap map[string]IndexedRepo, sup
 	return nil
 }
 
-func indexBuild(build string, config *config.ServerDetails) error {
+func indexBuild(buildName string, config *config.ServerDetails, c *components.Context) error {
 	var buildListStruct buildList
-	buildListData, respCode, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/build/"+build, config, "", nil, 0)
+	var notIndexCount, totalCount int
+	buildListData, respCode, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/build/"+buildName, config, "", nil, 0)
 	if respCode != 200 {
 		return errors.New("File list received unexpected response code:" + strconv.Itoa(respCode) + " :" + string(buildListData))
 	}
 	json.Unmarshal(buildListData, &buildListStruct)
-	fmt.Println("File list received:", buildListStruct.Data)
+	if len(buildListStruct.Data) == 0 {
+		return errors.New("No build versions found for:" + buildName)
+	}
+	fmt.Println(buildListStruct.Data)
+	buildAnalysis := list.New()
+
+	for i := range buildListStruct.Data {
+		var queueDetails queueDetails
+		queueDetails.Repo = buildName
+		var fileData helpers.Files
+		fileData.Uri = strings.TrimPrefix(buildListStruct.Data[i].Uri, "/")
+		queueDetails.FileListData = fileData
+		queueDetails.NotIndexCount = notIndexCount
+		queueDetails.TotalCount = totalCount
+		queueDetails.ScanType = "build"
+		buildAnalysis.PushBack(queueDetails)
+	}
+
+	totalCount, notIndexCount = workerPool(buildAnalysis, config, c, totalCount, notIndexCount)
+	fmt.Println("Total indexed count:", totalCount-notIndexCount, "/", totalCount)
+
 	return nil
 }
 
@@ -266,11 +287,15 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 				} else {
 					noExtCount++
 				}
-
 			}
 		}
 	}
+	totalCount, notIndexCount = workerPool(indexAnalysis, config, c, totalCount, notIndexCount)
+	fmt.Println("Total indexed count:", totalCount-notIndexCount, "/", totalCount, " Total not indexable:", notIndexableCount, " Files with no extension:", noExtCount)
+	fmt.Println("Unindexable file types count:", UnindexableMap)
+}
 
+func workerPool(indexAnalysis *list.List, config *config.ServerDetails, c *components.Context, totalCount, notIndexCount int) (int, int) {
 	numJobs := indexAnalysis.Len()
 	jobs := make(chan int, numJobs)
 	results := make(chan int, numJobs)
@@ -296,9 +321,7 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 		}
 		totalCount++
 	}
-
-	fmt.Println("Total indexed count:", totalCount-notIndexCount, "/", totalCount, " Total not indexable:", notIndexableCount, " Files with no extension:", noExtCount)
-	fmt.Println("Unindexable file types count:", UnindexableMap)
+	return totalCount, notIndexCount
 }
 
 func worker(id int, jobs <-chan int, results chan<- int, queue *list.List, config *config.ServerDetails, c *components.Context) {
@@ -349,6 +372,7 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 	var fileDetails []byte
 	var fileInfo helpers.FileInfo
 	var size string
+	var respCode int
 	if pkgType == "docker" {
 		uri = strings.TrimSuffix(uri, "/manifest.json")
 		folderDetails, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
@@ -365,13 +389,15 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 		fileInfo.MimeType = "application/json"
 		size = helpers.ByteCountDecimal(size64)
 	} else {
-		fileDetails, _, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
-		json.Unmarshal(fileDetails, &fileInfo)
-		size = helpers.ByteCountDecimal(helpers.StringToInt64(fileInfo.Size))
+		fileDetails, respCode, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
+		if respCode == 200 {
+			json.Unmarshal(fileDetails, &fileInfo)
+			size = helpers.ByteCountDecimal(helpers.StringToInt64(fileInfo.Size))
+		}
 	}
 	status = fmt.Sprintf("%-19v", status)
 	size = fmt.Sprintf("%-10v", size)
 	//not really helpful for docker
-	fmt.Println(status, "\t", size, "\t", fmt.Sprintf("%-25v", strings.TrimPrefix(fileInfo.MimeType, "application/")), " ", repo+uri)
+	fmt.Println(status, "\t", size, "\t", fmt.Sprintf("%-25v", strings.TrimPrefix(fileInfo.MimeType, "application/")), " ", repo+":"+uri)
 	return nil
 }

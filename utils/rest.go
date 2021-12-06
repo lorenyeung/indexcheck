@@ -245,7 +245,7 @@ func GetMetricsDataJSON(config *config.ServerDetails, prettyPrint bool) ([]byte,
 func StringToInt64(data string) int64 {
 	convert, err := strconv.ParseInt(data, 10, 64)
 	if err != nil {
-		LogRestFile.Warn(data, " is not of type integer")
+		LogRestFile.Warn(data, " is not of type integer:", err)
 		return 0
 	}
 	return convert
