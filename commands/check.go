@@ -11,6 +11,7 @@ import (
 
 	"github.com/jfrog/jfrog-cli-core/v2/plugins/components"
 	"github.com/jfrog/jfrog-cli-core/v2/utils/config"
+	"github.com/lorenyeung/indexcheck/internal"
 	helpers "github.com/lorenyeung/indexcheck/utils"
 	"github.com/prometheus/common/log"
 )
@@ -21,6 +22,7 @@ type queueDetails struct {
 	PkgType       string
 	Types         helpers.SupportedTypes
 	RepoType      string
+	ScanType      string
 	FileListData  helpers.Files
 	NotIndexCount int
 	TotalCount    int
@@ -30,6 +32,13 @@ type IndexedRepo struct {
 	Name    string `json:"name"`
 	PkgType string `json:"pkgType"`
 	Type    string `json:"type"`
+}
+
+type buildList struct {
+	Data []buildListData `json:"buildsNumbers"`
+}
+type buildListData struct {
+	Uri string `json:"uri"`
 }
 
 func GetCheckCommand() components.Command {
@@ -49,34 +58,43 @@ func GetCheckCommand() components.Command {
 func getCheckArguments() []components.Argument {
 	return []components.Argument{
 		{
-			Name:        "all",
-			Description: "list metrics.",
+			Name:        "repo-all",
+			Description: "verify all repositories.",
 		},
 		{
-			Name:        "list",
-			Description: "list metrics.",
+			Name:        "build-single",
+			Description: "verify a speciic build",
 		},
 		{
-			Name:        "repo",
-			Description: "list metrics.",
+			Name:        "repo-list",
+			Description: "verify comma delimited list of repositories.",
 		},
 		{
-			Name:        "path",
-			Description: "list metrics.",
+			Name:        "repo-single",
+			Description: "verify a single repository.",
+		},
+		{
+			Name:        "repo-path",
+			Description: "verify a speciic path within a repository.",
 		},
 	}
 }
 
 func getCheckFlags() []components.Flag {
 	return []components.Flag{
+		components.StringFlag{
+			Name:         "worker",
+			Description:  "Worker count for getting scan details",
+			DefaultValue: "5",
+		},
 		components.BoolFlag{
-			Name:         "indexed",
-			Description:  "Output straight from Xray",
+			Name:         "showall",
+			Description:  "Show all results, indexed or not",
 			DefaultValue: false,
 		},
 		components.BoolFlag{
-			Name:         "min",
-			Description:  "Get minimum JSON from Xray (no whitespace)",
+			Name:         "experimental",
+			Description:  "experimental scan details",
 			DefaultValue: false,
 		},
 	}
@@ -104,28 +122,34 @@ func CheckCmd(c *components.Context) error {
 		fmt.Println("TBD")
 		return nil
 	}
-	supportedTypes := helpers.GetSupportedTypesJSON()
-	indexList := CheckTypeAndRepoParams(config)
 
-	//convert to map for speedier look up
 	indexedMap := make(map[string]IndexedRepo)
-	for i := 0; i < len(indexList); i += 1 {
-		indexedMap[indexList[i].Name] = indexList[i]
+	var supportedTypes helpers.SupportedTypes
+	if strings.HasPrefix(c.Arguments[0], "repo-") {
+		supportedTypes = helpers.GetSupportedTypesJSON()
+		indexList := CheckTypeAndRepoParams(config)
+		//convert to map for speedier look up
+		for i := 0; i < len(indexList); i += 1 {
+			indexedMap[indexList[i].Name] = indexList[i]
+		}
 	}
 
 	// probably not the right way to do it
 	if len(c.Arguments) > 1 && len(c.Arguments) < 4 {
 		var err error
 		switch arg := c.Arguments[0]; arg {
-		case "all":
+		case "repo-all":
 			fmt.Println("This may take a while")
 			return nil
-		case "list":
-			return nil
-		case "repo":
+		case "repo-list":
+			repos := strings.Split(c.Arguments[1], ",")
+			for repo := range repos {
+				err = validateCheck(repos[repo], "", indexedMap, supportedTypes, config, c)
+			}
+		case "repo-single":
 			//check repo, and get type
-			err = validateCheck(c.Arguments[1], "", indexedMap, supportedTypes, config)
-		case "path":
+			err = validateCheck(c.Arguments[1], "", indexedMap, supportedTypes, config, c)
+		case "repo-path":
 			if len(c.Arguments) == 2 {
 				return errors.New("missing path")
 			}
@@ -133,10 +157,15 @@ func CheckCmd(c *components.Context) error {
 			if !strings.HasPrefix(path, "/") {
 				path = "/" + path
 			}
-			//weird behaviour with docker
-			err = validateCheck(c.Arguments[1], path, indexedMap, supportedTypes, config)
+			err = validateCheck(c.Arguments[1], path, indexedMap, supportedTypes, config, c)
+		case "build-single":
+			if len(c.Arguments) == 1 {
+				return errors.New("missing build name")
+			}
+			indexBuild(c.Arguments[1], config)
+
 		default:
-			return errors.New(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+			return errors.New("non existent argument:" + arg)
 		}
 		if err != nil {
 			return err
@@ -147,23 +176,33 @@ func CheckCmd(c *components.Context) error {
 		return nil
 	}
 	//return if wrong num arg
-	return errors.New("Wrong number of arguments. Expected: 0,1 or 2, " + "Received: " + strconv.Itoa(len(c.Arguments)))
+	return errors.New("Wrong number of arguments. Expected: 1-3, " + "Received: " + strconv.Itoa(len(c.Arguments)))
 
 }
 
-func validateCheck(repoName, path string, indexedMap map[string]IndexedRepo, supportedTypes helpers.SupportedTypes, config *config.ServerDetails) error {
+func validateCheck(repoName, path string, indexedMap map[string]IndexedRepo, supportedTypes helpers.SupportedTypes, config *config.ServerDetails, c *components.Context) error {
 	//check repo, and get type
 	repo := indexedMap[repoName]
 	if repo.Name == "" {
 		return errors.New("repository " + repoName + " does not exist or is not marked for indexing")
 	}
 	fmt.Println("checking:" + repoName + " at path:" + path)
-	//path validation may be needed
-	indexRepo(repo.Name, repo.PkgType, supportedTypes, repo.Type, config, path)
+	indexRepo(repo.Name, repo.PkgType, supportedTypes, repo.Type, config, path, c)
 	return nil
 }
 
-func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoType string, config *config.ServerDetails, folder string) {
+func indexBuild(build string, config *config.ServerDetails) error {
+	var buildListStruct buildList
+	buildListData, respCode, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/build/"+build, config, "", nil, 0)
+	if respCode != 200 {
+		return errors.New("File list received unexpected response code:" + strconv.Itoa(respCode) + " :" + string(buildListData))
+	}
+	json.Unmarshal(buildListData, &buildListStruct)
+	fmt.Println("File list received:", buildListStruct.Data)
+	return nil
+}
+
+func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoType string, config *config.ServerDetails, folder string, c *components.Context) {
 	var extensions []helpers.Extensions
 	pkgType = strings.ToLower(pkgType)
 	log.Debug("type:", repoType, " pkgType:", pkgType, " repo:", repo)
@@ -182,7 +221,9 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 	var fileListData []byte
 	var respCode int
 	if repoType == "remote" {
-		repo = repo + "-cache"
+		if !strings.HasSuffix(repo, "-cache") {
+			repo = repo + "-cache"
+		}
 	}
 	//TODO need workaround if using token, use content reader for larger amounts of data, or only allow path
 	fileListData, respCode, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+folder+"?list&deep=1", config, "", nil, 0)
@@ -199,43 +240,21 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 	for i := range fileListStruct.Files {
 		fileListStruct.Files[i].Uri = folder + fileListStruct.Files[i].Uri
 		for j := range extensions {
-			//maybe here?
 			log.Debug("File found:", fileListStruct.Files[i].Uri, " matching against:", extensions[j].Extension)
 			if strings.Contains(fileListStruct.Files[i].Uri, extensions[j].Extension) {
-				var indexAnalysisTest bool = true
-				if indexAnalysisTest {
-					var queueDetails queueDetails
-					queueDetails.Repo = repo
-					queueDetails.PkgType = pkgType
-					queueDetails.Types = types
-					queueDetails.RepoType = repoType
-					queueDetails.FileListData = fileListStruct.Files[i]
-					queueDetails.NotIndexCount = notIndexCount
-					queueDetails.TotalCount = totalCount
-					indexAnalysis.PushBack(queueDetails)
-				} else {
-					log.Info("File being sent to indexing:", fileListStruct.Files[i].Uri)
-					//send to indexing
-					m := map[string]string{
-						"Content-Type": "application/json",
-					}
-					body := "{\"artifacts\": [{\"repository\":\"" + repo + "\",\"path\":\"" + fileListStruct.Files[i].Uri + "\"}]}"
-
-					resp, respCode, _ := helpers.GetRestAPI("POST", true, config.XrayUrl+"api/v1/forceReindex", config, body, m, 0)
-					if respCode != 200 {
-						notIndexCount++
-						log.Warn("Unexpected Xray response:HTTP", respCode, " ", string(resp))
-					} else {
-						log.Info("Xray response:", string(resp))
-					}
-					totalCount++
-				}
+				var queueDetails queueDetails
+				queueDetails.Repo = repo
+				queueDetails.PkgType = pkgType
+				queueDetails.Types = types
+				queueDetails.RepoType = repoType
+				queueDetails.FileListData = fileListStruct.Files[i]
+				queueDetails.NotIndexCount = notIndexCount
+				queueDetails.ScanType = "artifact"
+				queueDetails.TotalCount = totalCount
+				indexAnalysis.PushBack(queueDetails)
 				break
 			} else if j+1 == len(extensions) {
 				//failed the last match
-				//if flags.LogUnindexableVar {
-				//fmt.Println("not indexable:", fileListStruct.Files[i].Uri)
-				//}
 				filePath := strings.Split(fileListStruct.Files[i].Uri, "/")
 				fileName := filePath[len(filePath)-1]
 				fileExt := strings.Split(fileName, ".")
@@ -256,9 +275,14 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 	jobs := make(chan int, numJobs)
 	results := make(chan int, numJobs)
 
-	//worker pool TODO add user flag here instead of 5
-	for w := 1; w <= 4; w++ {
-		go worker(w, jobs, results, indexAnalysis, config)
+	workers, err := strconv.Atoi(c.GetStringFlagValue("worker"))
+	if err != nil {
+		fmt.Println("error setting workers, using default of 5:", err)
+		workers = 5
+	}
+
+	for w := 1; w <= workers; w++ {
+		go worker(w, jobs, results, indexAnalysis, config, c)
 	}
 	for j := 1; j <= numJobs; j++ {
 		jobs <- j
@@ -273,16 +297,16 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 		totalCount++
 	}
 
-	log.Info("Total indexed count:", totalCount-notIndexCount, "/", totalCount, " Total not indexable:", notIndexableCount, " Files with no extension:", noExtCount)
-	log.Info("Unindexable file types count:", UnindexableMap)
+	fmt.Println("Total indexed count:", totalCount-notIndexCount, "/", totalCount, " Total not indexable:", notIndexableCount, " Files with no extension:", noExtCount)
+	fmt.Println("Unindexable file types count:", UnindexableMap)
 }
 
-func worker(id int, jobs <-chan int, results chan<- int, queue *list.List, config *config.ServerDetails) {
+func worker(id int, jobs <-chan int, results chan<- int, queue *list.List, config *config.ServerDetails, c *components.Context) {
 	for queue.Len() > 0 {
 		e := queue.Front().Value
 		queue.Remove(queue.Front())
 		log.Debug("worker ", id, " working on ", e)
-		notIndexCount, totalCount := Details(e.(queueDetails), config)
+		notIndexCount, totalCount := Details(e.(queueDetails), config, c)
 		log.Debug("not index:", notIndexCount, " total:", totalCount)
 		results <- totalCount
 	}
@@ -299,26 +323,21 @@ func CheckTypeAndRepoParams(config *config.ServerDetails) []IndexedRepo {
 	return result
 }
 
-func Details(q queueDetails, config *config.ServerDetails) (int, int) {
+func Details(q queueDetails, config *config.ServerDetails, c *components.Context) (int, int) {
 	//send to details
-	var printAll bool
-	//TODO flag
-	selectorflag := "all"
-	switch selectorflag {
-	case "unindexed":
-	case "all":
-		printAll = true
-	default:
-		log.Fatalf("Please provide one of the following: unindexed all")
+	var status string
+	var proc bool
+	if c.GetBoolFlagValue("experimental") {
+		status, proc = internal.GetDetails(q.Repo, q.PkgType, q.FileListData.Uri, config)
+	} else {
+		status, proc = helpers.GetStatus(q.Repo, q.PkgType, q.FileListData.Uri, q.FileListData.Sha256, q.ScanType, config)
 	}
-	//status, proc := internal.GetDetails(q.Repo, q.PkgType, q.FileListData.Uri, config)
-	status, proc := helpers.GetStatusArtifact(q.Repo, q.PkgType, q.FileListData.Uri, q.FileListData.Sha256, config)
 	if !proc {
 		q.NotIndexCount++
 		printStatus(status, q.Repo, q.PkgType, q.FileListData.Uri, config)
 	} else {
 		q.TotalCount++
-		if printAll {
+		if c.GetBoolFlagValue("showall") {
 			printStatus(status, q.Repo, q.PkgType, q.FileListData.Uri, config)
 		}
 	}
@@ -330,7 +349,7 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 	var fileDetails []byte
 	var fileInfo helpers.FileInfo
 	var size string
-	if pkgType == "docker" || strings.HasSuffix(uri, "manifest.json") {
+	if pkgType == "docker" {
 		uri = strings.TrimSuffix(uri, "/manifest.json")
 		folderDetails, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
 		json.Unmarshal(folderDetails, &fileInfo)
@@ -353,6 +372,6 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 	status = fmt.Sprintf("%-19v", status)
 	size = fmt.Sprintf("%-10v", size)
 	//not really helpful for docker
-	fmt.Println(status, "\t", size, "\t", fmt.Sprintf("%-16v", strings.TrimPrefix(fileInfo.MimeType, "application/")), " ", repo+uri)
+	fmt.Println(status, "\t", size, "\t", fmt.Sprintf("%-25v", strings.TrimPrefix(fileInfo.MimeType, "application/")), " ", repo+uri)
 	return nil
 }

@@ -27,6 +27,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type detailArtifact struct {
+	Status                        string `json:"status"`
+	Step                          string `json:"step"`
+	Reason                        string `json:"reason"`
+	IsImpactPathsRecoveryRequired bool   `json:"is_impact_paths_recovery_required"`
+}
+
 //LogRestFile log instantiation
 var LogRestFile = logrus.New()
 
@@ -348,33 +355,44 @@ func Trace() TraceData {
 	return trace
 }
 
-type detailArtifact struct {
-	Status                        string `json:"status"`
-	IsImpactPathsRecoveryRequired bool   `json:"is_impact_paths_recovery_required"`
-}
-
 //
-func GetStatusArtifact(repo string, pkgtype string, uri string, sha256 string, config *config.ServerDetails) (string, bool) {
-	body := "{\"repository_pkg_type\":" + "\"" + pkgtype + "\"," +
-		"\"path\":" + "\"" + repo + uri + "\"," +
-		"\"sha256\":" + "\"" + sha256 + "\"" +
-		"}"
+func GetStatus(repo, pkgtype, uri, sha256, scanType string, config *config.ServerDetails) (string, bool) {
+
+	var body string
+	switch scanType {
+	case "artifact":
+		body = "{\"repository_pkg_type\":" + "\"" + pkgtype + "\"," +
+			"\"path\":" + "\"" + repo + uri + "\"," +
+			"\"sha256\":" + "\"" + sha256 + "\"" +
+			"}"
+	case "build":
+		//re-use repo = build name, uri = build number
+		body = "{\"name\":" + "\"" + repo + "\"," +
+			"\"version\":" + "\"" + uri + "\"" +
+			"}"
+	case "releaseBundle":
+	default:
+		return scanType + " not supported", false
+	}
+
 	headers := map[string]string{"Content-type": "application/json"}
-	resp, respCode, _ := GetRestAPI("POST", true, config.XrayUrl+"api/v1/scan/status/artifact", config, body, headers, 0)
+	resp, respCode, _ := GetRestAPI("POST", true, config.XrayUrl+"api/v1/scan/status/"+scanType, config, body, headers, 0)
 	if respCode != 200 {
-		log.Error("Error getting details:", string(resp), body, headers, config.User, config.Password)
+		fmt.Println("Error getting details:", string(resp), body, headers, config.User, config.Password)
 	}
 	log.Debug(string(resp), body, headers, config.User, config.Password)
 
 	var detail detailArtifact
 	err := json.Unmarshal(resp, &detail)
 	if err != nil {
-		log.Error(err)
+		fmt.Println("Error unmarshalling details:", err)
 	}
-	if detail.Status == "not scanned" {
-		return detail.Status, false
-	} else {
+	//statuses
+	//"failed"/"not supported"/"in progress"/"not scanned"/"scanned"
+	if detail.Status == "scanned" {
 		return detail.Status, true
+	} else {
+		return detail.Status, false
 	}
 }
 
