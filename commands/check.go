@@ -11,9 +11,9 @@ import (
 
 	"github.com/jfrog/jfrog-cli-core/v2/plugins/components"
 	"github.com/jfrog/jfrog-cli-core/v2/utils/config"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 	"github.com/lorenyeung/indexcheck/internal"
 	helpers "github.com/lorenyeung/indexcheck/utils"
-	"github.com/prometheus/common/log"
 )
 
 //repo, pkgType, types, creds, repoType, flags, fileListStruct.Files[i], notIndexCount, totalCount
@@ -62,6 +62,10 @@ func getCheckArguments() []components.Argument {
 			Description: "verify all repositories.",
 		},
 		{
+			Name:        "build-list",
+			Description: "verify comma delimited list of builds",
+		},
+		{
 			Name:        "build-single",
 			Description: "verify a speciic build",
 		},
@@ -89,12 +93,12 @@ func getCheckFlags() []components.Flag {
 		},
 		components.BoolFlag{
 			Name:         "showall",
-			Description:  "Show all results, indexed or not",
+			Description:  "Show all results, scanned or not",
 			DefaultValue: false,
 		},
 		components.BoolFlag{
 			Name:         "experimental",
-			Description:  "experimental scan details",
+			Description:  "experimental scan details (artifacts only)",
 			DefaultValue: false,
 		},
 	}
@@ -119,14 +123,16 @@ func CheckCmd(c *components.Context) error {
 		return errors.New(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 	}
 	if len(c.Arguments) == 0 {
-		fmt.Println("TBD")
-		return nil
+		return errors.New("Please provide appropiate arguments")
 	}
 
 	indexedMap := make(map[string]IndexedRepo)
 	var supportedTypes helpers.SupportedTypes
 	if strings.HasPrefix(c.Arguments[0], "repo-") {
-		supportedTypes = helpers.GetSupportedTypesJSON()
+		supportedTypes, err = helpers.GetSupportedTypesJSON()
+		if err != nil {
+			return err
+		}
 		indexList := CheckTypeAndRepoParams(config)
 		//convert to map for speedier look up
 		for i := 0; i < len(indexList); i += 1 {
@@ -135,16 +141,26 @@ func CheckCmd(c *components.Context) error {
 	}
 
 	// probably not the right way to do it
-	if len(c.Arguments) > 1 && len(c.Arguments) < 4 {
+	if len(c.Arguments) > 0 && len(c.Arguments) < 4 {
 		var err error
 		switch arg := c.Arguments[0]; arg {
 		case "repo-all":
 			fmt.Println("This may take a while")
+			for i := range indexedMap {
+				log.Debug("sending " + indexedMap[i].Name + " for validation")
+				err = validateCheck(indexedMap[i].Name, "", indexedMap, supportedTypes, config, c)
+				if err != nil {
+					break
+				}
+			}
 			return nil
 		case "repo-list":
 			repos := strings.Split(c.Arguments[1], ",")
 			for repo := range repos {
 				err = validateCheck(repos[repo], "", indexedMap, supportedTypes, config, c)
+				if err != nil {
+					break
+				}
 			}
 		case "repo-single":
 			//check repo, and get type
@@ -155,7 +171,7 @@ func CheckCmd(c *components.Context) error {
 			}
 			path := c.Arguments[2]
 			if !strings.HasPrefix(path, "/") {
-				path = "/" + path
+				path = "/" + path //api requires leading forward slash
 			}
 			err = validateCheck(c.Arguments[1], path, indexedMap, supportedTypes, config, c)
 		case "build-single":
@@ -163,7 +179,14 @@ func CheckCmd(c *components.Context) error {
 				return errors.New("missing build name")
 			}
 			err = indexBuild(c.Arguments[1], config, c)
-
+		case "build-list":
+			builds := strings.Split(c.Arguments[1], ",")
+			for build := range builds {
+				err = indexBuild(builds[build], config, c)
+				if err != nil {
+					break
+				}
+			}
 		default:
 			return errors.New("non existent argument:" + arg)
 		}
@@ -196,15 +219,13 @@ func indexBuild(buildName string, config *config.ServerDetails, c *components.Co
 	var notIndexCount, totalCount int
 	buildListData, respCode, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/build/"+buildName, config, "", nil, 0)
 	if respCode != 200 {
-		return errors.New("File list received unexpected response code:" + strconv.Itoa(respCode) + " :" + string(buildListData))
+		return errors.New("Build list received unexpected response code:" + strconv.Itoa(respCode) + " :" + string(buildListData))
 	}
 	json.Unmarshal(buildListData, &buildListStruct)
 	if len(buildListStruct.Data) == 0 {
 		return errors.New("No build versions found for:" + buildName)
 	}
-	fmt.Println(buildListStruct.Data)
 	buildAnalysis := list.New()
-
 	for i := range buildListStruct.Data {
 		var queueDetails queueDetails
 		queueDetails.Repo = buildName
@@ -218,7 +239,7 @@ func indexBuild(buildName string, config *config.ServerDetails, c *components.Co
 	}
 
 	totalCount, notIndexCount = workerPool(buildAnalysis, config, c, totalCount, notIndexCount)
-	fmt.Println("Total indexed count:", totalCount-notIndexCount, "/", totalCount)
+	fmt.Println("Total "+buildName+" scanned count:", totalCount-notIndexCount, "/", totalCount)
 
 	return nil
 }
@@ -246,10 +267,11 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 			repo = repo + "-cache"
 		}
 	}
-	//TODO need workaround if using token, use content reader for larger amounts of data, or only allow path
+	//use content reader for larger amounts of data, or only allow path
 	fileListData, respCode, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+folder+"?list&deep=1", config, "", nil, 0)
 	if respCode != 200 {
-		log.Fatalf("File list received unexpected response code:", respCode, " :", string(fileListData))
+		log.Error("File list received unexpected response code:", respCode, " :", string(fileListData))
+		return
 	}
 	log.Debug("File list received:", string(fileListData))
 
@@ -269,6 +291,7 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 				queueDetails.Types = types
 				queueDetails.RepoType = repoType
 				queueDetails.FileListData = fileListStruct.Files[i]
+				log.Debug(fileListStruct.Files[i].Uri + " Sha256:" + fileListStruct.Files[i].Sha256)
 				queueDetails.NotIndexCount = notIndexCount
 				queueDetails.ScanType = "artifact"
 				queueDetails.TotalCount = totalCount
@@ -291,7 +314,7 @@ func indexRepo(repo string, pkgType string, types helpers.SupportedTypes, repoTy
 		}
 	}
 	totalCount, notIndexCount = workerPool(indexAnalysis, config, c, totalCount, notIndexCount)
-	fmt.Println("Total indexed count:", totalCount-notIndexCount, "/", totalCount, " Total not indexable:", notIndexableCount, " Files with no extension:", noExtCount)
+	fmt.Println("Total "+repo+" indexed count:", totalCount-notIndexCount, "/", totalCount, " Total not indexable:", notIndexableCount, " Files with no extension:", noExtCount)
 	fmt.Println("Unindexable file types count:", UnindexableMap)
 }
 
@@ -338,10 +361,12 @@ func worker(id int, jobs <-chan int, results chan<- int, queue *list.List, confi
 //Test if remote repository exists and is a remote
 func CheckTypeAndRepoParams(config *config.ServerDetails) []IndexedRepo {
 	repoCheckData, repoStatusCode, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/xrayRepo/getIndex", config, "", nil, 1)
-	if repoStatusCode != 200 {
-		log.Fatalf("Repo list does not exist.")
-	}
 	var result []IndexedRepo
+	if repoStatusCode != 200 {
+		log.Error("Repo list does not exist.")
+		return result
+	}
+
 	json.Unmarshal(repoCheckData, &result)
 	return result
 }
@@ -350,7 +375,7 @@ func Details(q queueDetails, config *config.ServerDetails, c *components.Context
 	//send to details
 	var status string
 	var proc bool
-	if c.GetBoolFlagValue("experimental") {
+	if c.GetBoolFlagValue("experimental") && q.ScanType == "artifact" {
 		status, proc = internal.GetDetails(q.Repo, q.PkgType, q.FileListData.Uri, config)
 	} else {
 		status, proc = helpers.GetStatus(q.Repo, q.PkgType, q.FileListData.Uri, q.FileListData.Sha256, q.ScanType, config)
@@ -383,7 +408,13 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 			var fileInfoDocker helpers.FileInfo
 			fileDetailsDocker, _, _ := helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri+path, config, "", nil, 0)
 			json.Unmarshal(fileDetailsDocker, &fileInfoDocker)
-			size64 = size64 + helpers.StringToInt64(fileInfoDocker.Size)
+			sizeConv, err := helpers.StringToInt64(fileInfoDocker.Size)
+			if err != nil {
+				log.Warn(err)
+				size64 = 0
+			} else {
+				size64 = size64 + sizeConv
+			}
 		}
 		//hardcode mimetype for now
 		fileInfo.MimeType = "application/json"
@@ -392,7 +423,12 @@ func printStatus(status string, repo string, pkgType string, uri string, config 
 		fileDetails, respCode, _ = helpers.GetRestAPI("GET", true, config.ArtifactoryUrl+"api/storage/"+repo+uri, config, "", nil, 0)
 		if respCode == 200 {
 			json.Unmarshal(fileDetails, &fileInfo)
-			size = helpers.ByteCountDecimal(helpers.StringToInt64(fileInfo.Size))
+			sizeConv, err := helpers.StringToInt64(fileInfo.Size)
+			if err != nil {
+				log.Warn(err)
+				sizeConv = 0
+			}
+			size = helpers.ByteCountDecimal(sizeConv)
 		}
 	}
 	status = fmt.Sprintf("%-19v", status)

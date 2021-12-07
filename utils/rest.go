@@ -21,10 +21,9 @@ import (
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 
 	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/log"
 	"github.com/prometheus/prom2json"
 
-	"github.com/sirupsen/logrus"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 type detailArtifact struct {
@@ -33,12 +32,6 @@ type detailArtifact struct {
 	Reason                        string `json:"reason"`
 	IsImpactPathsRecoveryRequired bool   `json:"is_impact_paths_recovery_required"`
 }
-
-//LogRestFile log instantiation
-var LogRestFile = logrus.New()
-
-//LogFileName log file name
-var LogFileName = "log-rest.log"
 
 //TraceData trace data struct
 type TraceData struct {
@@ -105,20 +98,19 @@ type Files struct {
 	Sha256 string `json:"sha2"`
 }
 
-func GetSupportedTypesJSON() SupportedTypes {
+func GetSupportedTypesJSON() (SupportedTypes, error) {
 	var supportTypesFile SupportedTypes
 	credsFile, err := os.Open(utils.GetUserHomeDir() + "/.jfrog/supported_types.json")
 	if err != nil {
-		log.Fatalf("Invalid supported_types.json file:", err)
+		return supportTypesFile, errors.New("Invalid supported_types.json file:" + err.Error())
 	}
 	defer credsFile.Close()
 	scanner, _ := ioutil.ReadAll(credsFile)
 	err = json.Unmarshal(scanner, &supportTypesFile)
 	if err != nil {
-		log.Warn(err)
+		return supportTypesFile, err
 	}
-
-	return supportTypesFile
+	return supportTypesFile, nil
 }
 
 //GetConfig get config from cli
@@ -145,14 +137,13 @@ func GetConfig() (*config.ServerDetails, error) {
 	return config, nil
 }
 
-func GetMetricsDataRaw(config *config.ServerDetails) []byte {
+func GetMetricsDataRaw(config *config.ServerDetails) ([]byte, error) {
 	metrics, respCode, _ := GetRestAPI("GET", true, config.Url+"xray/api/v1/metrics", config, "", nil, 1)
 	if respCode != 200 {
-		LogRestFile.Error("Received ", respCode, " while getting metrics")
-		//return nil, errors.New("Received " + strconv.Itoa(respCode) + " HTTP code while getting metrics")
+		return nil, errors.New("Received " + strconv.Itoa(respCode) + " HTTP code while getting metrics")
 	}
-	LogRestFile.Debug("Received ", respCode, " while getting metrics")
-	return metrics
+	log.Debug("Received ", respCode, " while getting metrics")
+	return metrics, nil
 }
 
 func match(s string) string {
@@ -167,37 +158,9 @@ func match(s string) string {
 }
 
 func GetMetricsDataJSON(config *config.ServerDetails, prettyPrint bool) ([]byte, error) {
-	metrics := GetMetricsDataRaw(config)
-	if strings.Contains(string(metrics), "jfrt_http_connections") {
-		stringsLine := strings.Split(string(metrics), "\n")
-		counter := 0
-		repCount := 0
-		for i := range stringsLine {
-
-			//doesn't work bc of help/updated.. adds repo_<metric> here. have to re think it
-			// if strings.Contains(stringsLine[i], "#") {
-			// 	continue
-			// }
-			// matchRepo := match(stringsLine[i])
-			// if matchRepo != "" {
-			// 	stringsLine[i] = matchRepo + "_" + stringsLine[i]
-			// }
-			if strings.Contains(stringsLine[i], "jfrt_http_connections") {
-				if repCount == 16 {
-					repCount = 0
-					counter++
-				}
-				stringsLine[i] = strings.ReplaceAll(stringsLine[i], "jfrt_http_connections", "a"+strconv.Itoa(counter)+"jfrt_http_connections")
-				repCount++
-			}
-
-		}
-		metrics = []byte(strings.Join(stringsLine[:], "\n"))
-
-	}
-	if strings.Contains(string(metrics), "queue_messages_error") {
-		LogRestFile.Warn("bleh")
-		strings.Replace(string(metrics), "\n", "", 0)
+	metrics, err := GetMetricsDataRaw(config)
+	if err != nil {
+		return nil, err
 	}
 	mfChan := make(chan *dto.MetricFamily, 1024)
 
@@ -207,7 +170,7 @@ func GetMetricsDataJSON(config *config.ServerDetails, prettyPrint bool) ([]byte,
 	go func() {
 		if err := prom2json.ParseReader(strings.NewReader(file), mfChan); err != nil {
 			//issue with reading metrics if there is an unescaped new line char
-			LogRestFile.Warn("error reading metrics:", err)
+			log.Warn("error reading metrics:", err)
 
 			return
 		}
@@ -221,12 +184,10 @@ func GetMetricsDataJSON(config *config.ServerDetails, prettyPrint bool) ([]byte,
 	}
 
 	var jsonText []byte
-	var err error
 	//pretty print
 	if prettyPrint {
 		jsonText, err := json.MarshalIndent(result, "", "    ")
 		if err != nil {
-			LogRestFile.Error(err.Error() + " at " + string(Trace().Fn) + " on line " + string(strconv.Itoa(Trace().Line)))
 			return nil, errors.New(err.Error() + " at " + string(Trace().Fn) + " on line " + string(strconv.Itoa(Trace().Line)))
 		}
 		fmt.Println(string(jsonText))
@@ -234,7 +195,6 @@ func GetMetricsDataJSON(config *config.ServerDetails, prettyPrint bool) ([]byte,
 	}
 	jsonText, err = json.Marshal(result)
 	if err != nil {
-		LogRestFile.Error(err.Error() + " at " + string(Trace().Fn) + " on line " + string(strconv.Itoa(Trace().Line)))
 		return nil, errors.New(err.Error() + " at " + string(Trace().Fn) + " on line " + string(strconv.Itoa(Trace().Line)))
 	}
 	//fmt.Println("after", time.Now())
@@ -242,13 +202,13 @@ func GetMetricsDataJSON(config *config.ServerDetails, prettyPrint bool) ([]byte,
 }
 
 //StringToInt64 self explanatory
-func StringToInt64(data string) int64 {
+func StringToInt64(data string) (int64, error) {
 	convert, err := strconv.ParseInt(data, 10, 64)
 	if err != nil {
-		LogRestFile.Warn(data, " is not of type integer:", err)
-		return 0
+		log.Warn(data, " is not of type integer:", err)
+		return 0, err
 	}
-	return convert
+	return convert, nil
 }
 
 func ByteCountDecimal(b int64) string {
@@ -306,36 +266,14 @@ func GetServersIdAndDefault() ([]string, string, error) {
 	return serversId, defaultVal, nil
 }
 
-// func SetLogger(logLevelVar string) {
-// 	level, err := log.ParseLevel(logLevelVar)
-// 	if err != nil {
-// 		level = log.InfoLevel
-// 	}
-// 	log.SetLevel(level)
-
-// 	log.SetReportCaller(true)
-// 	customFormatter := new(log.TextFormatter)
-// 	customFormatter.TimestampFormat = "2006-01-02 15:04:05"
-// 	customFormatter.QuoteEmptyFields = true
-// 	customFormatter.FullTimestamp = true
-// 	customFormatter.CallerPrettyfier = func(f *runtime.Frame) (string, string) {
-// 		repopath := strings.Split(f.File, "/")
-// 		//function := strings.Replace(f.Function, "go-pkgdl/", "", -1)
-// 		return fmt.Sprintf("%s\t", f.Function), fmt.Sprintf(" %s:%d\t", repopath[len(repopath)-1], f.Line)
-// 	}
-
-// 	log.SetFormatter(customFormatter)
-// 	fmt.Println("Log level set at ", level)
-// }
-
 //Check logger for errors
 func Check(e error, panicCheck bool, logs string, trace TraceData) {
 	if e != nil && panicCheck {
-		LogRestFile.Error(logs, " failed with error:", e, " ", trace.Fn, " on line:", trace.Line)
+		log.Error(logs, " failed with error:", e, " ", trace.Fn, " on line:", trace.Line)
 		panic(e)
 	}
 	if e != nil && !panicCheck {
-		LogRestFile.Warn(logs, " failed with error:", e, " ", trace.Fn, " on line:", trace.Line)
+		log.Warn(logs, " failed with error:", e, " ", trace.Fn, " on line:", trace.Line)
 	}
 }
 
@@ -344,7 +282,7 @@ func Trace() TraceData {
 	var trace TraceData
 	pc, file, line, ok := runtime.Caller(1)
 	if !ok {
-		LogRestFile.Warn("Failed to get function data")
+		log.Warn("Failed to get function data")
 		return trace
 	}
 
@@ -358,6 +296,10 @@ func Trace() TraceData {
 //
 func GetStatus(repo, pkgtype, uri, sha256, scanType string, config *config.ServerDetails) (string, bool) {
 
+	//there are odd ball cases where there is no Sha256 returned e.g. yum_3.2-25-2_all.deb that need to be considered
+	if sha256 == "" {
+		return "No sha256 in filelist", false
+	}
 	var body string
 	switch scanType {
 	case "artifact":
@@ -378,9 +320,9 @@ func GetStatus(repo, pkgtype, uri, sha256, scanType string, config *config.Serve
 	headers := map[string]string{"Content-type": "application/json"}
 	resp, respCode, _ := GetRestAPI("POST", true, config.XrayUrl+"api/v1/scan/status/"+scanType, config, body, headers, 0)
 	if respCode != 200 {
-		fmt.Println("Error getting details:", string(resp), body, headers, config.User, config.Password)
+		log.Debug("Error getting details:", string(resp), body, headers, config.User)
+		return "Failed getting details", false
 	}
-	log.Debug(string(resp), body, headers, config.User, config.Password)
 
 	var detail detailArtifact
 	err := json.Unmarshal(resp, &detail)
@@ -403,20 +345,21 @@ type IndexedRepo struct {
 }
 
 //Test if remote repository exists and is a remote
-func CheckTypeAndRepoParams(config *config.ServerDetails) []IndexedRepo {
+func CheckTypeAndRepoParams(config *config.ServerDetails) ([]IndexedRepo, error) {
 	repoCheckData, repoStatusCode, _ := GetRestAPI("GET", true, config.ArtifactoryUrl+"api/xrayRepo/getIndex", config, "", nil, 1)
-	if repoStatusCode != 200 {
-		log.Fatalf("Repo list does not exist.")
-	}
 	var result []IndexedRepo
+	if repoStatusCode != 200 {
+		return result, errors.New("Repo list does not exist.")
+	}
+
 	json.Unmarshal(repoCheckData, &result)
-	return result
+	return result, nil
 }
 
 //GetRestAPI GET rest APIs response with error handling
 func GetRestAPI(method string, auth bool, urlInput string, config *config.ServerDetails, providedfilepath string, header map[string]string, retry int) ([]byte, int, http.Header) {
 	if retry > 5 {
-		LogRestFile.Warn("Exceeded retry limit, cancelling further attempts")
+		log.Warn("Exceeded retry limit, cancelling further attempts")
 		return nil, 0, nil
 	}
 	body := new(bytes.Buffer)
@@ -449,12 +392,12 @@ func GetRestAPI(method string, auth bool, urlInput string, config *config.Server
 		}
 	}
 	for x, y := range header {
-		LogRestFile.Debug("Recieved extra header:", x+":"+y)
+		log.Debug("Recieved extra header:", x+":"+y)
 		req.Header.Set(x, y)
 	}
 
 	if err != nil {
-		LogRestFile.Warn("The HTTP request failed with error", err)
+		log.Warn("The HTTP request failed with error", err)
 	} else {
 
 		resp, err := client.Do(req)
@@ -466,33 +409,33 @@ func GetRestAPI(method string, auth bool, urlInput string, config *config.Server
 		// need to account for 403s with xray, or other 403s, 429? 204 is bad too (no content for docker)
 		switch resp.StatusCode {
 		case 200:
-			LogRestFile.Debug("Received ", resp.StatusCode, " OK on ", method, " request for ", urlInput, " continuing")
+			log.Debug("Received ", resp.StatusCode, " OK on ", method, " request for ", urlInput, " continuing")
 		case 201:
 			if method == "PUT" {
-				LogRestFile.Debug("Received ", resp.StatusCode, " ", method, " request for ", urlInput, " continuing")
+				log.Debug("Received ", resp.StatusCode, " ", method, " request for ", urlInput, " continuing")
 			}
 		case 403:
-			LogRestFile.Error("Received ", resp.StatusCode, " Forbidden on ", method, " request for ", urlInput, " continuing")
+			log.Error("Received ", resp.StatusCode, " Forbidden on ", method, " request for ", urlInput, " continuing")
 			// should we try retry here? probably not
 		case 404:
-			LogRestFile.Debug("Received ", resp.StatusCode, " Not Found on ", method, " request for ", urlInput, " continuing")
+			log.Debug("Received ", resp.StatusCode, " Not Found on ", method, " request for ", urlInput, " continuing")
 		case 429:
-			LogRestFile.Error("Received ", resp.StatusCode, " Too Many Requests on ", method, " request for ", urlInput, ", sleeping then retrying, attempt ", retry)
+			log.Error("Received ", resp.StatusCode, " Too Many Requests on ", method, " request for ", urlInput, ", sleeping then retrying, attempt ", retry)
 			time.Sleep(10 * time.Second)
 			GetRestAPI(method, auth, urlInput, config, providedfilepath, header, retry+1)
 		case 204:
 			if method == "GET" {
-				LogRestFile.Error("Received ", resp.StatusCode, " No Content on ", method, " request for ", urlInput, ", sleeping then retrying")
+				log.Error("Received ", resp.StatusCode, " No Content on ", method, " request for ", urlInput, ", sleeping then retrying")
 				time.Sleep(10 * time.Second)
 				GetRestAPI(method, auth, urlInput, config, providedfilepath, header, retry+1)
 			} else {
-				LogRestFile.Debug("Received ", resp.StatusCode, " OK on ", method, " request for ", urlInput, " continuing")
+				log.Debug("Received ", resp.StatusCode, " OK on ", method, " request for ", urlInput, " continuing")
 			}
 		case 500:
-			LogRestFile.Error("Received ", resp.StatusCode, " Internal Server error on ", method, " request for ", urlInput, " failing out")
+			log.Error("Received ", resp.StatusCode, " Internal Server error on ", method, " request for ", urlInput, " failing out")
 			return nil, 0, nil
 		default:
-			LogRestFile.Warn("Received ", resp.StatusCode, " on ", method, " request for ", urlInput, " continuing")
+			log.Warn("Received ", resp.StatusCode, " on ", method, " request for ", urlInput, " continuing")
 		}
 		//Mostly for HEAD requests
 		statusCode := resp.StatusCode

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/jfrog/jfrog-cli-core/v2/plugins/components"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 	helpers "github.com/lorenyeung/indexcheck/utils"
 )
 
@@ -74,7 +75,10 @@ func MetricsCmd(c *components.Context) error {
 		conf.raw = c.GetBoolFlagValue("raw")
 
 		if conf.raw {
-			metricsRaw := helpers.GetMetricsDataRaw(config)
+			metricsRaw, err := helpers.GetMetricsDataRaw(config)
+			if err != nil {
+				log.Warn(err)
+			}
 			if len(metricsRaw) == 0 {
 				return errors.New("Received invalid metric data")
 			}
@@ -121,8 +125,6 @@ func MetricsCmd(c *components.Context) error {
 				fmt.Println(metricsData[i].Name)
 			}
 			return nil
-		case "linux":
-			fmt.Println("Linux.")
 		default:
 			err = errors.New("Unrecognized argument:" + arg)
 		}

@@ -17,6 +17,7 @@ import (
 
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 type Alphabetic []string
@@ -86,7 +87,7 @@ func GraphCmd(c *components.Context) error {
 	p.SetRect(0, 6, 25, 11)
 
 	q := widgets.NewParagraph()
-	q.Title = "CPU Time (seconds)"
+	q.Title = "CPU Usage (%)"
 	q.Text = "Initializing"
 	q.SetRect(26, 6, 51, 11)
 
@@ -110,7 +111,7 @@ func GraphCmd(c *components.Context) error {
 	g2.BorderStyle.Fg = ui.ColorWhite
 
 	g3 := widgets.NewGauge()
-	g3.Title = "Current Used Heap"
+	g3.Title = "Current Used Go Heap"
 	g3.SetRect(0, 14, 36, 17)
 	g3.Percent = 0
 	g3.BarColor = ui.ColorGreen
@@ -226,7 +227,7 @@ func GraphCmd(c *components.Context) error {
 				for i := range dbConnPlotData {
 					dbConnPlotData[i] = make([]float64, 60)
 				}
-				helpers.LogRestFile.Info("reset graphs")
+				log.Info("reset graphs")
 			}
 			time.Sleep(time.Second * time.Duration(1))
 		}
@@ -278,26 +279,26 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 
 		var err error
 		switch dataArg := data[i].Name; dataArg {
-		case "sys_cpu_totaltime_seconds":
+		case "sys_cpu_ratio":
 			q.Text = data[i].Metric[0].Value
-		case "jfrt_runtime_heap_maxmemory_bytes":
+		case "go_memstats_heap_reserved_bytes":
 			heapMaxSpace, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
 				//prevent cannot divide by zero error for all heap/space floats to prevent remote connection crashes
 				heapMaxSpace = big.NewFloat(1)
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
-		case "jfrt_runtime_heap_freememory_bytes":
+		case "go_memstats_heap_in_use_bytes":
 			heapFreeSpace, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
 				heapFreeSpace = big.NewFloat(1)
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
-		case "jfrt_runtime_heap_totalmemory_bytes":
+		case "go_memstats_heap_allocated_bytes":
 			heapTotalSpace, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
 				heapTotalSpace = big.NewFloat(1)
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
 		case "jfrt_runtime_heap_processors_total":
 			heapProc = data[i].Metric[0].Value
@@ -305,33 +306,33 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 			freeSpace, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
 				freeSpace = big.NewFloat(1)
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
 		case "app_disk_total_bytes":
 			totalSpace, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
 				totalSpace = big.NewFloat(1)
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
-		case "jfrt_db_connections_active_total":
+		case "db_connection_pool_in_use_total":
 			dbConnActive = data[i].Metric[0].Value
-		case "jfrt_db_connections_max_active_total":
+		case "db_connection_pool_max_open_total":
 			dbConnMax = data[i].Metric[0].Value
 		case "jfrt_db_connections_min_idle_total":
 			dbConnMinIdle = data[i].Metric[0].Value
-		case "jfrt_db_connections_idle_total":
+		case "db_connection_pool_idle_total":
 			dbConnIdle = data[i].Metric[0].Value
 		case "jfrt_artifacts_gc_duration_seconds":
 			gcDurationSecs = data[i].Metric[0].Value
 
 			gcStart, err := strconv.ParseInt(data[i].Metric[0].Labels.Start, 10, 64)
 			if err != nil {
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
 			startTimeEpoch := time.Unix(gcStart/1000, 0)
 			gcEnd, err := strconv.ParseInt(data[i].Metric[0].Labels.End, 10, 64)
 			if err != nil {
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
 			endTimeEpoch := time.Unix(gcEnd/1000, 0)
 
@@ -339,7 +340,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 		case "jfrt_artifacts_gc_size_cleaned_bytes":
 			gcSizeCleanedBytes, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 				gcSizeCleanedBytes = big.NewFloat(1)
 			}
 		case "jfrt_artifacts_gc_binaries_total":
@@ -348,7 +349,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 			gcCurrentSizeBytes, _, err = big.ParseFloat(data[i].Metric[0].Value, 10, 0, big.ToNearestEven)
 			if err != nil {
 				gcCurrentSizeBytes = big.NewFloat(1)
-				helpers.LogRestFile.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
+				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
 
 		default:
@@ -361,7 +362,17 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 		gcSizeCleanedBytesStr := gcSizeCleanedBytesBigInt.String()
 		gcCurrentSizeBytesStr := gcCurrentSizeBytesBigInt.String()
 
-		o2.Text = lastGcRun + "\nNumber of binaries cleaned: " + gcBinariesTotal + " Duration: " + gcDurationSecs + "s\nCleaned up: " + helpers.ByteCountDecimal(helpers.StringToInt64(gcSizeCleanedBytesStr)) + " Current size: " + helpers.ByteCountDecimal(helpers.StringToInt64(gcCurrentSizeBytesStr))
+		gcSizeConv, err := helpers.StringToInt64(gcSizeCleanedBytesStr)
+		if err != nil {
+			log.Warn(err)
+			gcSizeConv = 0
+		}
+		gcCurrentConv, err := helpers.StringToInt64(gcCurrentSizeBytesStr)
+		if err != nil {
+			log.Warn(err)
+			gcCurrentConv = 0
+		}
+		o2.Text = lastGcRun + "\nNumber of binaries cleaned: " + gcBinariesTotal + " Duration: " + gcDurationSecs + "s\nCleaned up: " + helpers.ByteCountDecimal(gcSizeConv) + " Current size: " + helpers.ByteCountDecimal(gcCurrentConv)
 
 		//repo specific connection check
 		if strings.Contains(data[i].Name, "jfrt_http_connections") {
@@ -430,9 +441,9 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 	var remoteBcData []float64
 	timeSecond := responseTime.Second()
 
-	helpers.LogRestFile.Debug("size of map before processing", len(rcPlotData))
+	log.Debug("size of map before processing", len(rcPlotData))
 	if connMapsize > 0 {
-		helpers.LogRestFile.Trace("remote connection print out:", remoteConnMap)
+		log.Debug("remote connection print out:", remoteConnMap)
 		for i := range remoteConnMap {
 			id := strings.Split(remoteConnMap[i].Name, "jfrt_http_connections")
 			uniqId := id[0] + string(remoteConnMap[i].Help[0])
@@ -443,7 +454,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 			totalValue, err := strconv.Atoi(remoteConnMap[i].Metric[0].Value)
 			if err != nil {
 				totalValue = 0 //safety in case it can't convert
-				helpers.LogRestFile.Warn("Failed to convert number ", remoteConnMap[i].Metric[0].Value, " at ", helpers.Trace().Fn, " line ", helpers.Trace().Line)
+				log.Warn("Failed to convert number ", remoteConnMap[i].Metric[0].Value, " at ", helpers.Trace().Fn, " line ", helpers.Trace().Line)
 			}
 
 			//init the float for the map for plot
@@ -470,7 +481,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 								rcPlotDataRow[i] = 0
 							}
 							rcPlotData[uniqId] = rcPlotDataRow
-							helpers.LogRestFile.Info("reset graph")
+							log.Info("reset graph")
 						}
 					}
 					rcPlotData[uniqId] = rcPlotDataRow
@@ -504,11 +515,11 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 	var rcPlotFinalData = make([][]float64, len(rcPlotData))
 	var rcCount int = 0
 	for i := range rcPlotData {
-		helpers.LogRestFile.Debug("rcPlot data:", rcPlotData[i])
-		helpers.LogRestFile.Debug("i:", i, " data size:", len(rcPlotData[i]))
+		log.Debug("rcPlot data:", rcPlotData[i])
+		log.Debug("i:", i, " data size:", len(rcPlotData[i]))
 		if len(rcPlotData[i]) == 0 {
 			//skip
-			helpers.LogRestFile.Debug("Map is empty at this location:", i)
+			log.Debug("Map is empty at this location:", i)
 		} else {
 
 			rcPlotFinalData[rcCount] = rcPlotData[i]
@@ -525,7 +536,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 			plotData[1][i] = float64(0) //whats the point of plotting max
 			plotData[2][i] = float64(dbConnIdleInt)
 			plotData[3][i] = float64(dbConnMinIdleInt)
-			helpers.LogRestFile.Debug("current time:", i)
+			log.Debug("current time:", i)
 		}
 
 		for i := 0; i < interval; i++ {
@@ -535,14 +546,14 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 				plotData[1][timeSecond+i] = float64(0) //whats the point of plotting max
 				plotData[2][timeSecond+i] = float64(dbConnIdleInt)
 				plotData[3][timeSecond+i] = float64(dbConnMinIdleInt)
-				helpers.LogRestFile.Debug("current time:", i)
+				log.Debug("current time:", i)
 			}
 		}
 	}
 	p1.Data = plotData
 	p2.DataLabels = []string{"hello"}
 
-	helpers.LogRestFile.Debug("size of plot rc:", len(rcPlotFinalData))
+	log.Debug("size of plot rc:", len(rcPlotFinalData))
 	p2.Data = rcPlotFinalData
 
 	//total
