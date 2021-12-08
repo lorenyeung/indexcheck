@@ -26,6 +26,7 @@ Since this plugin is currently not included in [JFrog CLI Plugins Registry](http
     - Flags:
         - worker: Worker count for getting scan details **[Default: 1]**
         - showall: Show all results, scanned or not **[Default: false]**
+        - reindex: force reindex unscanned artifacts
     - Example:
     ```
    $ jfrog indexcheck check repo-list generic-local,docker-local --showall
@@ -41,6 +42,7 @@ Since this plugin is currently not included in [JFrog CLI Plugins Registry](http
         - none
     - Flags:
         - interval: Polling interval in seconds **[Default: 1]**
+        - retry: Show retry queues in chart **[Default: false]**
     - Example:
     ```
    $ jfrog indexcheck graph

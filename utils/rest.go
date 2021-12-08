@@ -298,7 +298,7 @@ func Trace() TraceData {
 func GetStatus(repo, pkgtype, uri, sha256, scanType string, config *config.ServerDetails) (string, bool) {
 
 	//there are odd ball cases where there is no Sha256 returned e.g. yum_3.2-25-2_all.deb that need to be considered
-	if sha256 == "" {
+	if sha256 == "" && scanType == "artifact" {
 		return "No sha256 in filelist", false
 	}
 	var body string

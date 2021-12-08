@@ -97,12 +97,12 @@ func getCheckFlags() []components.Flag {
 		},
 		components.BoolFlag{
 			Name:         "experimental",
-			Description:  "experimental scan details (artifacts only)",
+			Description:  "experimental scan details (artifacts only) - disabled",
 			DefaultValue: false,
 		},
 		components.BoolFlag{
 			Name:         "reindex",
-			Description:  "experimental scan details (artifacts only)",
+			Description:  "force reindex unscanned artifacts",
 			DefaultValue: false,
 		},
 	}
@@ -388,6 +388,29 @@ func Details(q queueDetails, config *config.ServerDetails, c *components.Context
 	if !proc {
 		q.NotIndexCount++
 		printStatus(status, q.Repo, q.PkgType, q.FileListData.Uri, config)
+		//reindex if needed:
+		if c.GetBoolFlagValue("reindex") {
+			m := map[string]string{
+				"Content-Type": "application/json",
+			}
+			var body string
+			switch q.ScanType {
+			case "artifact":
+				body = "{\"artifacts\": [{\"repository\":\"" + q.Repo + "\",\"path\":\"" + q.FileListData.Uri + "\"}]}"
+			case "build":
+				//re-use repo = build name, uri = build number
+				body = "{\"builds\": [{\"name\":\"" + q.Repo + "\",\"number\":\"" + q.FileListData.Uri + "\"}]}"
+			case "releaseBundle":
+			default:
+			}
+			fmt.Println(body)
+			resp, respCode, _ := helpers.GetRestAPI("POST", true, config.XrayUrl+"api/v1/forceReindex", config, body, m, 0)
+			if respCode != 200 {
+				log.Warn("Unexpected Xray response:HTTP", respCode, " ", string(resp))
+			} else {
+				log.Info("Xray response:", string(resp))
+			}
+		}
 	} else {
 		q.TotalCount++
 		if c.GetBoolFlagValue("showall") {
