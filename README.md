@@ -1,7 +1,7 @@
 # indexcheck
 
 ## About this plugin
-This plugin uses the.
+This plugin uses the scan status Xray API to determine what files within repositories (or builds) are marked as unscanned. This requires Xray 3.34 and above.
 
 ## Installation with JFrog CLI
 Since this plugin is currently not included in [JFrog CLI Plugins Registry](https://github.com/jfrog/jfrog-cli-plugins-reg), it needs to be built and installed manually. Follow these steps to install and use this plugin with JFrog CLI.
@@ -11,6 +11,7 @@ Since this plugin is currently not included in [JFrog CLI Plugins Registry](http
 4. CD into the root directory of the cloned project.
 5. Run ```go build``` to create the binary in the current directory.
 6. Copy the binary into the ```~/.jfrog/plugins``` directory.
+7. Get a copy of your supported_types.json (located under ```$ARTIFACTORY_HOME/var/data/artifactory/.cache/xray```) and put it under the CLI HOME ```~/.jfrog/```.
 
 ## Usage
 ### Commands
@@ -34,6 +35,7 @@ Since this plugin is currently not included in [JFrog CLI Plugins Registry](http
    not scanned         	 572.6 MB   	 x-gzip                      generic-local:/centos/sha256__153c9ca3d7b8383f4dd5b6a4824ce19b68825bbd6a6c7691199435a8f0840eab.tar.gz
    not scanned         	 657 B      	 x-gzip                      generic-local:/centos/sha256__05236417d65b6cbe061c7ed0331bf6975406631a274eab18f66dc9b13d8fdb84.tar.gz
     ```
+    ![](demo-check.gif)    
 * graph
     - Arguments:
         - none
@@ -43,7 +45,7 @@ Since this plugin is currently not included in [JFrog CLI Plugins Registry](http
     ```
    $ jfrog indexcheck graph
     ```
-    ![](demo.gif)
+    ![](demo-graph.gif)
 * metrics
     - Arguments:
         - list - list metrics
