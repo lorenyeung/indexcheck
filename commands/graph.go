@@ -138,12 +138,29 @@ func GraphCmd(c *components.Context) error {
 	var dbMinIdlePlotData = make([]float64, 60)
 	var dbConnPlotData = [][]float64{dbActivePlotData, dbMaxPlotData, dbIdlePlotData, dbMinIdlePlotData}
 
+	var sysLoadOneData = make([]float64, 60)
+	var sysLoadFiveData = make([]float64, 60)
+	var sysLoadFifteenData = make([]float64, 60)
+	var sysLoadPlotData = [][]float64{sysLoadOneData, sysLoadFiveData, sysLoadFifteenData}
+
+
+
 	for i := 0; i < 60; i++ {
 		dbActivePlotData[i] = 0
 		dbMaxPlotData[i] = 0
 		dbIdlePlotData[i] = 0
 		dbMinIdlePlotData[i] = 0
 	}
+
+	for i := 0; i < 60; i++ {
+		sysLoadOneData[i] = 0
+		sysLoadFiveData[i] = 0
+		sysLoadFifteenData[i] = 0
+	}
+
+
+
+
 	p1.Data = dbConnPlotData
 	p1.SetRect(78, 0, 146, 28)
 	p1.DotMarkerRune = '.'
@@ -173,6 +190,24 @@ func GraphCmd(c *components.Context) error {
 	p2.AxesColor = ui.ColorWhite
 	p2.DrawDirection = widgets.DrawLeft
 	p2.HorizontalScale = 1
+
+
+	//Sysload plot chart
+
+	p3 := widgets.NewPlot()
+	p3.Title = "Sys Load Graph"
+
+	p3.Data = sysLoadPlotData
+	p3.SetRect(78, 28, 146, 56)
+	p3.DotMarkerRune = '.'
+	p3.AxesColor = ui.ColorWhite
+	p3.LineColors[0] = ui.ColorBlack
+	p3.LineColors[1] = ui.ColorGreen
+	p3.LineColors[2] = ui.ColorBlue
+	p3.LineColors[3] = ui.ColorRed
+	p3.DrawDirection = widgets.DrawLeft
+	p3.HorizontalScale = 1
+
 
 	//bar chart
 	barchartData := []float64{1, 1, 1, 1}
@@ -211,7 +246,7 @@ func GraphCmd(c *components.Context) error {
 	l.WrapText = false
 	l.SetRect(37, 11, 77, 34)
 
-	ui.Render(bc, bc2, g2, g3, g4, l, o, o2, p, p1, p2, q, r)
+	ui.Render(bc, bc2, g2, g3, g4, l, o, o2, p, p1, p3, q, r)
 
 	uiEvents := ui.PollEvents()
 	ticker := time.NewTicker(time.Second * time.Duration(interval)).C
@@ -227,7 +262,7 @@ func GraphCmd(c *components.Context) error {
 				for i := range dbConnPlotData {
 					dbConnPlotData[i] = make([]float64, 60)
 				}
-				log.Info("reset graphs")
+				log.Debug("reset graphs")
 			}
 			time.Sleep(time.Second * time.Duration(1))
 		}
@@ -244,7 +279,7 @@ func GraphCmd(c *components.Context) error {
 		// use Go's built-in tickers for updating and drawing data
 		case <-ticker:
 			var err error
-			offSetCounter, rcPlotData, err = drawFunction(config, bc, bc2, barchartData, g2, g3, g4, l, o, o2, p, p1, dbConnPlotData, p2, rcPlotData, q, r, offSetCounter, tickerCount, interval)
+			offSetCounter, rcPlotData, err = drawFunction(config, bc, bc2, barchartData, g2, g3, g4, l, o, o2, p, p1, dbConnPlotData, p2, rcPlotData, q, r, offSetCounter, tickerCount, interval, p3, sysLoadPlotData)
 			if err != nil {
 				return errorutils.CheckError(err)
 			}
@@ -254,7 +289,7 @@ func GraphCmd(c *components.Context) error {
 	}
 }
 
-func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widgets.BarChart, bcData []float64, g2 *widgets.Gauge, g3 *widgets.Gauge, g4 *widgets.Gauge, l *widgets.List, o *widgets.Paragraph, o2 *widgets.Paragraph, p *widgets.Paragraph, p1 *widgets.Plot, plotData [][]float64, p2 *widgets.Plot, rcPlotData map[string][]float64, q *widgets.Paragraph, r *widgets.Paragraph, offSetCounter int, ticker int, interval int) (int, map[string][]float64, error) {
+func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widgets.BarChart, bcData []float64, g2 *widgets.Gauge, g3 *widgets.Gauge, g4 *widgets.Gauge, l *widgets.List, o *widgets.Paragraph, o2 *widgets.Paragraph, p *widgets.Paragraph, p1 *widgets.Plot, plotData [][]float64, p2 *widgets.Plot, rcPlotData map[string][]float64, q *widgets.Paragraph, r *widgets.Paragraph, offSetCounter int, ticker int, interval int, p3 *widgets.Plot, sysLoadplotData [][]float64) (int, map[string][]float64, error) {
 	responseTime := time.Now()
 	data, lastUpdate, offset, err := helpers.GetMetricsData(config, offSetCounter, false, interval)
 	if err != nil {
@@ -265,7 +300,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 
 	var freeSpace, totalSpace, heapFreeSpace, heapMaxSpace, heapTotalSpace *big.Float = big.NewFloat(1), big.NewFloat(100), big.NewFloat(100), big.NewFloat(100), big.NewFloat(100)
 	var heapProc string
-	var dbConnIdle, dbConnMinIdle, dbConnActive, dbConnMax, gcBinariesTotal, gcDurationSecs, lastGcRun string
+	var dbConnIdle, dbConnMinIdle, dbConnActive, dbConnMax, gcBinariesTotal, gcDurationSecs, lastGcRun, sysLoadOne, sysLoadFive, sysLoadFifteen string
 	var gcSizeCleanedBytes, gcCurrentSizeBytes *big.Float = big.NewFloat(0), big.NewFloat(0)
 
 	//maybe we can turn this into a hashtable for faster lookup
@@ -322,6 +357,16 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 			dbConnMinIdle = data[i].Metric[0].Value
 		case "db_connection_pool_idle_total":
 			dbConnIdle = data[i].Metric[0].Value
+
+
+		case "sys_load_1":
+			sysLoadOne = data[i].Metric[0].Value
+		case "sys_load_5":
+			sysLoadFive = data[i].Metric[0].Value
+		case "sys_load_15":
+			sysLoadFifteen = data[i].Metric[0].Value
+
+
 		case "jfrt_artifacts_gc_duration_seconds":
 			gcDurationSecs = data[i].Metric[0].Value
 
@@ -413,6 +458,24 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 		dbConnMinIdleInt = 0
 		//return 0, errors.New(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 	}
+
+	sysLoadOneInt, err := strconv.ParseFloat(sysLoadOne, 64)
+	if err != nil {
+		sysLoadOneInt = 0
+	}
+
+	sysLoadFiveInt, err := strconv.ParseFloat(sysLoadFive, 64)
+	if err != nil {
+		sysLoadFiveInt = 0
+	}
+
+	sysLoadFifteenInt, err := strconv.ParseFloat(sysLoadFifteen, 64)
+	if err != nil {
+		sysLoadFifteenInt = 0
+	}
+
+
+
 	pctDbConnActive := dbConnActiveInt / dbConnMaxInt * 100
 	g4.Percent = pctDbConnActive
 
@@ -551,6 +614,32 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 		}
 	}
 	p1.Data = plotData
+
+
+	//Sys load data
+	for i := 0; i < 60; i++ {
+		if i == int(timeSecond) {
+			//order: active, max, idle, minIdle
+			sysLoadplotData[0][i] = float64(sysLoadOneInt)
+			sysLoadplotData[1][i] = float64(sysLoadFiveInt)
+			sysLoadplotData[2][i] = float64(sysLoadFifteenInt)
+			log.Debug("current time:", i)
+		}
+
+		for i := 0; i < interval; i++ {
+			if timeSecond+i < 60 {
+				//order: active, max, idle, minIdle
+				sysLoadplotData[0][timeSecond+i] = float64(sysLoadOneInt)
+				sysLoadplotData[1][timeSecond+i] = float64(sysLoadFiveInt)
+				sysLoadplotData[2][timeSecond+i] = float64(sysLoadFifteenInt)
+				log.Debug("current time:", i)
+			}
+		}
+	}
+	p3.Data = sysLoadplotData
+
+
+
 	p2.DataLabels = []string{"hello"}
 
 	log.Debug("size of plot rc:", len(rcPlotFinalData))
@@ -563,7 +652,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 
 	o.Text = "Current time: " + time.Now().Format("2006.01.02 15:04:05") + "\nLast updated: " + lastUpdate + " (" + strconv.Itoa(offset) + " seconds) Data Compute time:" + time.Now().Sub(responseTimeCompute).String() + "\nResponse time: " + time.Now().Sub(responseTime).String() + " Polling interval: every " + strconv.Itoa(interval) + " seconds\nServer url: " + config.ServerId
 
-	ui.Render(bc, bc2, g2, g3, g4, l, o, o2, p, p1, p2, q, r)
+	ui.Render(bc, bc2, g2, g3, g4, l, o, o2, p, p1, p3, q, r)
 	return offset, rcPlotData, nil
 }
 
