@@ -67,12 +67,13 @@ type Metrics struct {
 
 //LabelsStruct struct
 type LabelsStruct struct {
-	Start  string `json:"start"`
-	End    string `json:"end"`
-	Status string `json:"status"`
-	Type   string `json:"type"`
-	Max    string `json:"max"`
-	Pool   string `json:"pool"`
+	Start     string `json:"start"`
+	End       string `json:"end"`
+	Status    string `json:"status"`
+	Type      string `json:"type"`
+	Max       string `json:"max"`
+	Pool      string `json:"pool"`
+	QueueName string `json:"queue_name"`
 }
 
 type SupportedTypes struct {

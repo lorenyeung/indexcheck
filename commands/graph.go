@@ -49,6 +49,11 @@ func getGraphFlags() []components.Flag {
 			Description:  "Polling interval in seconds",
 			DefaultValue: "1",
 		},
+		components.BoolFlag{
+			Name:         "retry",
+			Description:  "Show retry queues in chart",
+			DefaultValue: false,
+		},
 	}
 }
 
@@ -198,18 +203,18 @@ func GraphCmd(c *components.Context) error {
 	bc2.Title = "Remote Connections Barchart"
 	bc2.BarWidth = 3
 	bc2.Data = []float64{}
-	bc2.SetRect(0, 34, 77, 45)
+	bc2.SetRect(0, 34, 36, 45)
 	bc2.Labels = []string{}
 	bc2.BarColors[0] = ui.ColorGreen
 	bc2.NumStyles[0] = ui.NewStyle(ui.ColorBlack)
 
 	//remote connections list
 	l := widgets.NewList()
-	l.Title = "Remote Connections List"
+	l.Title = "Non-zero Queue List"
 	l.Rows = []string{}
 	l.TextStyle = ui.NewStyle(ui.ColorYellow)
 	l.WrapText = false
-	l.SetRect(37, 11, 77, 34)
+	l.SetRect(37, 11, 77, 45)
 
 	ui.Render(bc, bc2, g2, g3, g4, l, o, o2, p, p1, p2, q, r)
 
@@ -227,7 +232,7 @@ func GraphCmd(c *components.Context) error {
 				for i := range dbConnPlotData {
 					dbConnPlotData[i] = make([]float64, 60)
 				}
-				log.Info("reset graphs")
+				log.Debug("reset graphs")
 			}
 			time.Sleep(time.Second * time.Duration(1))
 		}
@@ -244,7 +249,7 @@ func GraphCmd(c *components.Context) error {
 		// use Go's built-in tickers for updating and drawing data
 		case <-ticker:
 			var err error
-			offSetCounter, rcPlotData, err = drawFunction(config, bc, bc2, barchartData, g2, g3, g4, l, o, o2, p, p1, dbConnPlotData, p2, rcPlotData, q, r, offSetCounter, tickerCount, interval)
+			offSetCounter, rcPlotData, err = drawFunction(config, bc, bc2, barchartData, g2, g3, g4, l, o, o2, p, p1, dbConnPlotData, p2, rcPlotData, q, r, offSetCounter, tickerCount, interval, c)
 			if err != nil {
 				return errorutils.CheckError(err)
 			}
@@ -254,7 +259,7 @@ func GraphCmd(c *components.Context) error {
 	}
 }
 
-func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widgets.BarChart, bcData []float64, g2 *widgets.Gauge, g3 *widgets.Gauge, g4 *widgets.Gauge, l *widgets.List, o *widgets.Paragraph, o2 *widgets.Paragraph, p *widgets.Paragraph, p1 *widgets.Plot, plotData [][]float64, p2 *widgets.Plot, rcPlotData map[string][]float64, q *widgets.Paragraph, r *widgets.Paragraph, offSetCounter int, ticker int, interval int) (int, map[string][]float64, error) {
+func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widgets.BarChart, bcData []float64, g2 *widgets.Gauge, g3 *widgets.Gauge, g4 *widgets.Gauge, l *widgets.List, o *widgets.Paragraph, o2 *widgets.Paragraph, p *widgets.Paragraph, p1 *widgets.Plot, plotData [][]float64, p2 *widgets.Plot, rcPlotData map[string][]float64, q *widgets.Paragraph, r *widgets.Paragraph, offSetCounter int, ticker int, interval int, c *components.Context) (int, map[string][]float64, error) {
 	responseTime := time.Now()
 	data, lastUpdate, offset, err := helpers.GetMetricsData(config, offSetCounter, false, interval)
 	if err != nil {
@@ -267,6 +272,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 	var heapProc string
 	var dbConnIdle, dbConnMinIdle, dbConnActive, dbConnMax, gcBinariesTotal, gcDurationSecs, lastGcRun string
 	var gcSizeCleanedBytes, gcCurrentSizeBytes *big.Float = big.NewFloat(0), big.NewFloat(0)
+	var numQueues int
 
 	//maybe we can turn this into a hashtable for faster lookup
 	//remote connection specifc
@@ -274,6 +280,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 
 	var remoteConnMap2 = make(map[string]helpers.Data)
 	var remoteConnMapIds = []string{}
+	var queueMetrics []helpers.Metrics
 
 	for i := range data {
 
@@ -351,6 +358,9 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 				gcCurrentSizeBytes = big.NewFloat(1)
 				log.Error(err.Error() + " at " + string(helpers.Trace().Fn) + " on line " + string(strconv.Itoa(helpers.Trace().Line)))
 			}
+		case "queue_messages_total":
+			numQueues = len(data[i].Metric)
+			queueMetrics = data[i].Metric
 
 		default:
 			// do nothing
@@ -434,7 +444,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 
 	//list data
 	connMapsize := len(remoteConnMap)
-	var listRow = make([]string, connMapsize)
+	var listRow = make([]string, numQueues)
 	var bc2labels []string
 	var totalLease, totalMax, totalAvailable, totalPending int
 	mapCount := 0
@@ -448,7 +458,7 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 			id := strings.Split(remoteConnMap[i].Name, "jfrt_http_connections")
 			uniqId := id[0] + string(remoteConnMap[i].Help[0])
 			bc2labels = append(bc2labels, uniqId)
-			listRow[mapCount] = remoteConnMap[i].Metric[0].Value + " " + remoteConnMap[i].Metric[0].Labels.Pool + " " + strings.ReplaceAll(remoteConnMap[i].Help, " Connections", "") + " " + uniqId
+			//listRow[mapCount] = remoteConnMap[i].Metric[0].Value + " " + remoteConnMap[i].Metric[0].Labels.Pool + " " + strings.ReplaceAll(remoteConnMap[i].Help, " Connections", "") + " " + uniqId
 			mapCount++
 
 			totalValue, err := strconv.Atoi(remoteConnMap[i].Metric[0].Value)
@@ -503,6 +513,24 @@ func drawFunction(config *config.ServerDetails, bc *widgets.BarChart, bc2 *widge
 
 			case "Available Connections":
 				totalAvailable = totalAvailable + totalValue
+			}
+		}
+	}
+
+	var queueChartSize int
+	for i := 0; i < len(queueMetrics); i++ {
+		size, err := strconv.Atoi(queueMetrics[i].Value)
+		if err != nil {
+			log.Error(err)
+		}
+
+		if size == 0 {
+			if c.GetBoolFlagValue("retry") {
+				listRow[queueChartSize] = queueMetrics[i].Labels.QueueName + " " + queueMetrics[i].Value
+				queueChartSize++
+			} else if !strings.Contains(queueMetrics[i].Labels.QueueName, "Retry") {
+				listRow[queueChartSize] = queueMetrics[i].Labels.QueueName + " " + queueMetrics[i].Value
+				queueChartSize++
 			}
 		}
 	}

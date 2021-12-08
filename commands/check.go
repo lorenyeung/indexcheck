@@ -12,7 +12,6 @@ import (
 	"github.com/jfrog/jfrog-cli-core/v2/plugins/components"
 	"github.com/jfrog/jfrog-cli-core/v2/utils/config"
 	"github.com/jfrog/jfrog-client-go/utils/log"
-	"github.com/lorenyeung/indexcheck/internal"
 	helpers "github.com/lorenyeung/indexcheck/utils"
 )
 
@@ -98,6 +97,11 @@ func getCheckFlags() []components.Flag {
 		},
 		components.BoolFlag{
 			Name:         "experimental",
+			Description:  "experimental scan details (artifacts only)",
+			DefaultValue: false,
+		},
+		components.BoolFlag{
+			Name:         "reindex",
 			Description:  "experimental scan details (artifacts only)",
 			DefaultValue: false,
 		},
@@ -376,7 +380,8 @@ func Details(q queueDetails, config *config.ServerDetails, c *components.Context
 	var status string
 	var proc bool
 	if c.GetBoolFlagValue("experimental") && q.ScanType == "artifact" {
-		status, proc = internal.GetDetails(q.Repo, q.PkgType, q.FileListData.Uri, config)
+		// status, proc = internal.GetDetails(q.Repo, q.PkgType, q.FileListData.Uri, config)
+		status, proc = helpers.GetStatus(q.Repo, q.PkgType, q.FileListData.Uri, q.FileListData.Sha256, q.ScanType, config)
 	} else {
 		status, proc = helpers.GetStatus(q.Repo, q.PkgType, q.FileListData.Uri, q.FileListData.Sha256, q.ScanType, config)
 	}
